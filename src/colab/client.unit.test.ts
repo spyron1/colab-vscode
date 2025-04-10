@@ -13,6 +13,7 @@ import {
   SubscriptionTier,
   Variant,
   Kernel,
+  Session,
 } from "./api";
 import { ColabClient } from "./client";
 
@@ -168,6 +169,28 @@ describe("ColabClient", () => {
     sinon.assert.calledOnce(fetchStub);
   });
 
+  it("successfully unassigns the specified assignment", async () => {
+    const endpoint = "mock-endpoint";
+    const path = `tun/m/unassign/${endpoint}`;
+    const token = "mock-xsrf-token";
+    fetchStub
+      .withArgs(matchAuthorizedRequest(path, "GET"))
+      .resolves(
+        new Response(withXSSI(JSON.stringify({ token })), { status: 200 }),
+      );
+    fetchStub
+      .withArgs(
+        matchAuthorizedRequest(path, "POST", {
+          "X-Goog-Colab-Token": token,
+        }),
+      )
+      .resolves(new Response(undefined, { status: 200 }));
+
+    await expect(client.unassign(endpoint)).to.eventually.be.fulfilled;
+
+    sinon.assert.calledTwice(fetchStub);
+  });
+
   it("successfully lists kernels", async () => {
     const lastActivity = new Date().toISOString();
 
@@ -200,6 +223,72 @@ describe("ColabClient", () => {
     };
 
     await expect(client.listKernels("foo")).to.eventually.deep.equal([kernel]);
+
+    sinon.assert.calledOnce(fetchStub);
+  });
+
+  it("successfully lists sessions", async () => {
+    const endpoint = "mock-endpoint";
+    const last_activity = new Date().toISOString();
+    fetchStub
+      .withArgs(matchAuthorizedRequest(`tun/m/${endpoint}/api/sessions`, "GET"))
+      .resolves(
+        new Response(
+          withXSSI(
+            JSON.stringify([
+              {
+                id: "mock-session-id",
+                kernel: {
+                  id: "mock-kernel-id",
+                  name: "mock-kernel-name",
+                  last_activity,
+                  execution_state: "idle",
+                  connections: 1,
+                },
+                name: "mock-session-name",
+                path: "mock-path",
+                type: "notebook",
+              },
+            ]),
+          ),
+          { status: 200 },
+        ),
+      );
+    const session: Session = {
+      id: "mock-session-id",
+      kernel: {
+        id: "mock-kernel-id",
+        name: "mock-kernel-name",
+        lastActivity: last_activity,
+        executionState: "idle",
+        connections: 1,
+      },
+      name: "mock-session-name",
+      path: "mock-path",
+      type: "notebook",
+    };
+
+    await expect(client.listSessions(endpoint)).to.eventually.deep.equal([
+      session,
+    ]);
+
+    sinon.assert.calledOnce(fetchStub);
+  });
+
+  it("successfully deletes a session", async () => {
+    const endpoint = "mock-endpoint";
+    const sessionId = "mock-session-id";
+    fetchStub
+      .withArgs(
+        matchAuthorizedRequest(
+          `tun/m/${endpoint}/api/sessions/${sessionId}`,
+          "DELETE",
+        ),
+      )
+      .resolves(new Response(undefined, { status: 200 }));
+
+    await expect(client.deleteSession(endpoint, sessionId)).to.eventually.be
+      .fulfilled;
 
     sinon.assert.calledOnce(fetchStub);
   });
@@ -298,7 +387,7 @@ function withXSSI(response: string): string {
 
 function matchAuthorizedRequest(
   endpoint: string,
-  method: "GET" | "POST",
+  method: "DELETE" | "GET" | "POST",
   otherHeaders?: Record<string, string>,
 ): SinonMatcher {
   return sinon.match({

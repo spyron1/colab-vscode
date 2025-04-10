@@ -457,6 +457,106 @@ describe("AssignmentManager", () => {
     });
   });
 
+  describe("unassignServer", () => {
+    describe("when the server does not exist", () => {
+      beforeEach(() => {
+        storageStub.remove.resolves(false);
+      });
+
+      it("does not list sessions", async () => {
+        await assignmentManager.unassignServer(defaultServer);
+
+        sinon.assert.notCalled(colabClientStub.listSessions);
+      });
+
+      it("does not unassign the server", async () => {
+        await assignmentManager.unassignServer(defaultServer);
+
+        sinon.assert.notCalled(colabClientStub.unassign);
+      });
+
+      it("does not emit an assignment change event", async () => {
+        const listener = sinon.stub();
+        assignmentManager.onDidAssignmentsChange(listener);
+
+        await assignmentManager.unassignServer(defaultServer);
+
+        sinon.assert.notCalled(listener);
+      });
+    });
+
+    describe("when the server does exist", () => {
+      beforeEach(() => {
+        storageStub.remove.resolves(true);
+      });
+
+      it("deletes sessions", async () => {
+        const session1 = {
+          id: "mock-session-id-1",
+          kernel: {
+            id: "mock-kernel-id",
+            name: "mock-kernel-name",
+            lastActivity: new Date().toISOString(),
+            executionState: "idle",
+            connections: 1,
+          },
+          name: "mock-session-name",
+          path: "mock-path",
+          type: "notebook",
+        };
+        const session2 = {
+          ...session1,
+          id: "mock-session-id-2",
+        };
+        colabClientStub.listSessions.resolves([session1, session2]);
+
+        await assignmentManager.unassignServer(defaultServer);
+
+        sinon.assert.calledTwice(colabClientStub.deleteSession);
+        sinon.assert.calledWith(
+          colabClientStub.deleteSession,
+          defaultServer.endpoint,
+          session1.id,
+        );
+        sinon.assert.calledWith(
+          colabClientStub.deleteSession,
+          defaultServer.endpoint,
+          session2.id,
+        );
+      });
+
+      it("does not delete sessions when there are none", async () => {
+        colabClientStub.listSessions.resolves([]);
+
+        await assignmentManager.unassignServer(defaultServer);
+
+        sinon.assert.notCalled(colabClientStub.deleteSession);
+      });
+
+      it("unassigns the server", async () => {
+        colabClientStub.listSessions.resolves([]);
+
+        await assignmentManager.unassignServer(defaultServer);
+
+        sinon.assert.calledOnceWithExactly(
+          colabClientStub.unassign,
+          defaultServer.endpoint,
+        );
+      });
+
+      it("emits an assignment change event", async () => {
+        colabClientStub.listSessions.resolves([]);
+        const listener = sinon.stub();
+        assignmentManager.onDidAssignmentsChange(listener);
+        colabClientStub.unassign.resolves();
+
+        await assignmentManager.unassignServer(defaultServer);
+
+        sinon.assert.calledOnce(listener);
+      });
+    });
+  });
+
   describe("refreshConnection", () => {
     const newToken = "new-token";
     let refreshedServer: ColabAssignedServer;

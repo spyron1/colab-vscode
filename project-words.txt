@@ -10,6 +10,8 @@ refreshable
 tombstoned
 toolsai
 tpus
+unassigning
+unassigns
 veryhighmem
 vulnz
 xssi

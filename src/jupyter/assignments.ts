@@ -159,6 +159,28 @@ export class AssignmentManager implements vscode.Disposable {
   }
 
   /**
+   * Unassigns the given server.
+   *
+   * Deletes all kernel sessions for the specified server before
+   * unassigning. Only unassigns if all session deletions succeed.
+   *
+   * @param server - The server to remove.
+   */
+  async unassignServer(server: ColabAssignedServer): Promise<void> {
+    const removed = await this.storage.remove(server.id);
+    if (!removed) {
+      return;
+    }
+    this.assignmentsChange.fire();
+    await Promise.all(
+      (await this.client.listSessions(server.endpoint)).map((session) =>
+        this.client.deleteSession(server.endpoint, session.id),
+      ),
+    );
+    await this.client.unassign(server.endpoint);
+  }
+
+  /**
    * Assigns a new server or refreshes the connection information for an
    * existing server.
    *

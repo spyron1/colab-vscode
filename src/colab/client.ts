@@ -15,6 +15,8 @@ import {
   AssignmentsSchema,
   KernelSchema,
   Kernel,
+  SessionSchema,
+  Session,
   UserInfo,
   UserInfoSchema,
 } from "./api";
@@ -118,6 +120,28 @@ export class ColabClient {
   }
 
   /**
+   * Unassigns the specified machine assignment.
+   *
+   * @param endpoint - The endpoint to unassign.
+   */
+  async unassign(endpoint: string, signal?: AbortSignal): Promise<void> {
+    const url = new URL(
+      `${TUN_ENDPOINT}/unassign/${endpoint}`,
+      this.colabDomain,
+    );
+    const { token } = await this.issueRequest(
+      url,
+      { method: "GET", signal },
+      z.object({ token: z.string() }),
+    );
+    await this.issueRequest(url, {
+      method: "POST",
+      headers: { [XSRF_HEADER_KEY]: token },
+      signal,
+    });
+  }
+
+  /**
    * Lists all assignments.
    *
    * @returns The list of assignments.
@@ -142,6 +166,43 @@ export class ColabClient {
       new URL(`${TUN_ENDPOINT}/${endpoint}/api/kernels`, this.colabDomain),
       { method: "GET", signal },
       z.array(KernelSchema),
+    );
+  }
+
+  /**
+   * Lists all sessions for a given endpoint.
+   *
+   * @param endpoint - The assigned endpoint to list sessions for.
+   * @returns The list of sessions.
+   */
+  async listSessions(
+    endpoint: string,
+    signal?: AbortSignal,
+  ): Promise<Session[]> {
+    return await this.issueRequest(
+      new URL(`${TUN_ENDPOINT}/${endpoint}/api/sessions`, this.colabDomain),
+      { method: "GET", signal },
+      z.array(SessionSchema),
+    );
+  }
+
+  /**
+   * Deletes the given session
+   *
+   * @param endpoint - The endpoint to delete the session from.
+   * @param sessionId - The ID of the session to delete.
+   */
+  async deleteSession(
+    endpoint: string,
+    sessionId: string,
+    signal?: AbortSignal,
+  ) {
+    return await this.issueRequest(
+      new URL(
+        `${TUN_ENDPOINT}/${endpoint}/api/sessions/${sessionId}`,
+        this.colabDomain,
+      ),
+      { method: "DELETE", signal },
     );
   }
 

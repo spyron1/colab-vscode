@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import { expect } from "chai";
 import sinon, { SinonStubbedInstance } from "sinon";
 import { InputBox, QuickPick, QuickPickItem } from "vscode";
+import { AssignmentManager } from "../jupyter/assignments";
 import { ColabAssignedServer } from "../jupyter/servers";
 import { ServerStorage } from "../jupyter/storage";
 import {
@@ -12,7 +13,7 @@ import {
 } from "../test/helpers/quick-input";
 import { newVsCodeStub, VsCodeStub } from "../test/helpers/vscode";
 import { Variant } from "./api";
-import { renameServerAlias } from "./server-commands";
+import { removeServer, renameServerAlias } from "./server-commands";
 
 describe("Server Commands", () => {
   let vsCodeStub: VsCodeStub;
@@ -145,6 +146,43 @@ describe("Server Commands", () => {
         await expect(rename).to.eventually.be.fulfilled;
         sinon.assert.notCalled(serverStorageStub.store);
       });
+    });
+  });
+
+  describe("removeServer", () => {
+    let assignmentManagerStub: SinonStubbedInstance<AssignmentManager>;
+
+    beforeEach(() => {
+      assignmentManagerStub = sinon.createStubInstance(AssignmentManager);
+    });
+
+    it("lists assigned servers for selection", async () => {
+      const additionalServer = { ...defaultServer, label: "bar" };
+      assignmentManagerStub.getAssignedServers.resolves([
+        defaultServer,
+        additionalServer,
+      ]);
+
+      void removeServer(vsCodeStub.asVsCode(), assignmentManagerStub);
+      await quickPickStub.nextShow();
+
+      expect(quickPickStub.items).to.eql([
+        { label: defaultServer.label, value: defaultServer },
+        { label: additionalServer.label, value: additionalServer },
+      ]);
+    });
+
+    it("unassigns the selected server", async () => {
+      assignmentManagerStub.getAssignedServers.resolves([defaultServer]);
+
+      const remove = removeServer(vsCodeStub.asVsCode(), assignmentManagerStub);
+      await quickPickStub.nextShow();
+      quickPickStub.onDidChangeSelection.yield([
+        { label: defaultServer.label, value: defaultServer },
+      ]);
+
+      expect(remove).to.eventually.be.fulfilled;
+      assignmentManagerStub.unassignServer.calledOnceWithExactly(defaultServer);
     });
   });
 });
