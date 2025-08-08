@@ -8,7 +8,7 @@ import fetch, {
 } from "node-fetch";
 import vscode from "vscode";
 import { Accelerator, Assignment, Variant } from "../colab/api";
-import { ColabClient } from "../colab/client";
+import { ColabClient, TooManyAssignmentsError } from "../colab/client";
 import {
   COLAB_SERVERS,
   ColabAssignedServer,
@@ -253,11 +253,20 @@ export class AssignmentManager implements vscode.Disposable {
   private async assignOrRefresh(
     toAssign: ColabJupyterServer,
   ): Promise<ColabAssignedServer> {
-    const { assignment, isNew } = await this.client.assign(
-      toAssign.id,
-      toAssign.variant,
-      toAssign.accelerator,
-    );
+    let assignment: Assignment;
+    let isNew: boolean;
+    try {
+      ({ assignment, isNew } = await this.client.assign(
+        toAssign.id,
+        toAssign.variant,
+        toAssign.accelerator,
+      ));
+    } catch (error) {
+      if (error instanceof TooManyAssignmentsError) {
+        void this.notifyMaxAssignmentsExceeded();
+      }
+      throw error;
+    }
     const server = this.serverWithConnectionInfo(
       {
         id: toAssign.id,
@@ -308,6 +317,35 @@ export class AssignmentManager implements vscode.Disposable {
       },
     };
   }
+
+  private async notifyMaxAssignmentsExceeded() {
+    // TODO: Account for subscription tiers in actions.
+    // TODO: Account for the number of assignments from the VS Code and Colab
+    // UIs in the error message and actions.
+    const selectedAction = await this.vs.window.showErrorMessage(
+      "You have too many servers. Remove a server to continue.",
+      (await this.hasAssignedServer())
+        ? AssignmentsExceededActions.REMOVE_SERVER
+        : AssignmentsExceededActions.REMOVE_SERVER_COLAB_WEB,
+    );
+    switch (selectedAction) {
+      case AssignmentsExceededActions.REMOVE_SERVER:
+        this.vs.commands.executeCommand("colab.removeServer");
+        return;
+      case AssignmentsExceededActions.REMOVE_SERVER_COLAB_WEB:
+        this.vs.env.openExternal(
+          this.vs.Uri.parse("https://colab.research.google.com/"),
+        );
+        return;
+      default:
+        return;
+    }
+  }
+}
+
+enum AssignmentsExceededActions {
+  REMOVE_SERVER = "Remove Server",
+  REMOVE_SERVER_COLAB_WEB = "Remove Server at Colab Web",
 }
 
 /**

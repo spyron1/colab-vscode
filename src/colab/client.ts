@@ -277,15 +277,23 @@ export class ColabClient {
     signal?: AbortSignal,
   ): Promise<Assignment> {
     const url = this.buildAssignUrl(notebookHash, variant, accelerator);
-    return this.issueRequest(
-      url,
-      {
-        method: "POST",
-        headers: { [XSRF_HEADER_KEY]: xsrfToken },
-        signal,
-      },
-      AssignmentSchema,
-    );
+    try {
+      return await this.issueRequest(
+        url,
+        {
+          method: "POST",
+          headers: { [XSRF_HEADER_KEY]: xsrfToken },
+          signal,
+        },
+        AssignmentSchema,
+      );
+    } catch (error) {
+      // Check for Precondition Failed
+      if (error instanceof ColabRequestError && error.response.status === 412) {
+        throw new TooManyAssignmentsError(error.message);
+      }
+      throw error;
+    }
   }
 
   private buildAssignUrl(
@@ -345,6 +353,9 @@ export class ColabClient {
     return schema.parse(JSON.parse(stripXssiPrefix(body)));
   }
 }
+
+/** Error thrown when the user has too many assignments. */
+export class TooManyAssignmentsError extends Error {}
 
 /**
  * If present, strip the XSSI busting prefix from v.

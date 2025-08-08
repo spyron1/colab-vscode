@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import { assert, expect } from "chai";
 import fetch, { Headers } from "node-fetch";
 import sinon, { SinonStubbedInstance } from "sinon";
+import { Uri } from "vscode";
 import {
   Accelerator,
   Assignment,
@@ -11,7 +12,7 @@ import {
   SubscriptionTier,
   Variant,
 } from "../colab/api";
-import { ColabClient } from "../colab/client";
+import { ColabClient, TooManyAssignmentsError } from "../colab/client";
 import { ServerStorageFake } from "../test/helpers/server-storage";
 import { newVsCodeStub, VsCodeStub } from "../test/helpers/vscode";
 import { isUUID } from "../utils/uuid";
@@ -529,6 +530,82 @@ describe("AssignmentManager", () => {
             "X-Colab-Client-Agent": "vscode",
           }),
         });
+      });
+    });
+
+    describe("when a server is not assigned due to quota", () => {
+      beforeEach(() => {
+        colabClientStub.assign
+          .withArgs(
+            defaultServer.id,
+            defaultServer.variant,
+            defaultServer.accelerator,
+          )
+          .rejects(new TooManyAssignmentsError());
+      });
+
+      it("notifies the user", async () => {
+        await expect(
+          assignmentManager.assignServer(
+            defaultServer.id,
+            defaultAssignmentDescriptor,
+          ),
+        ).to.eventually.be.rejectedWith(TooManyAssignmentsError);
+
+        sinon.assert.calledOnceWithMatch(
+          vsCodeStub.window.showErrorMessage as sinon.SinonStub,
+          /.*Remove a server.*/,
+        );
+      });
+
+      it("presents an action to remove servers from VS Code when theres at least 1 VS Code assignment", async () => {
+        sinon.stub(assignmentManager, "hasAssignedServer").resolves(true);
+        (vsCodeStub.window.showErrorMessage as sinon.SinonStub).resolves(
+          "Remove Server",
+        );
+
+        await expect(
+          assignmentManager.assignServer(
+            defaultServer.id,
+            defaultAssignmentDescriptor,
+          ),
+        ).to.eventually.be.rejectedWith(TooManyAssignmentsError);
+
+        sinon.assert.calledOnceWithMatch(
+          vsCodeStub.window.showErrorMessage as sinon.SinonStub,
+          /.*Remove a server.*/,
+          "Remove Server",
+        );
+        sinon.assert.calledOnceWithExactly(
+          vsCodeStub.commands.executeCommand,
+          "colab.removeServer",
+        );
+      });
+
+      it("presents an action to remove servers from Colab when there are 0 VS Code assignments", async () => {
+        sinon.stub(assignmentManager, "hasAssignedServer").resolves(false);
+        (vsCodeStub.window.showErrorMessage as sinon.SinonStub).resolves(
+          "Remove Server at Colab Web",
+        );
+
+        await expect(
+          assignmentManager.assignServer(
+            defaultServer.id,
+            defaultAssignmentDescriptor,
+          ),
+        ).to.eventually.be.rejectedWith(TooManyAssignmentsError);
+
+        sinon.assert.calledOnceWithMatch(
+          vsCodeStub.window.showErrorMessage as sinon.SinonStub,
+          /.*Remove a server.*/,
+          "Remove Server at Colab Web",
+        );
+        sinon.assert.calledOnceWithMatch(
+          vsCodeStub.env.openExternal,
+          sinon.match(function (url: Uri) {
+            return url.toString() === "https://colab.research.google.com/";
+          }),
+        );
       });
     });
   });
