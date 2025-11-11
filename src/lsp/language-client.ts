@@ -32,6 +32,7 @@ type VSLanguageClientFactory = (
 export class LanguageClientController extends AsyncToggleable<Disposable> {
   private client: ColabLanguageClient | undefined;
   private latestServerEndpoint: string;
+  private abortController = new AbortController();
 
   constructor(
     private vs: typeof vscode,
@@ -41,24 +42,39 @@ export class LanguageClientController extends AsyncToggleable<Disposable> {
     super();
   }
 
-  override async initialize(signal?: AbortSignal): Promise<Disposable> {
-    const assignmentListener = this.assignments.onDidAssignmentsChange(
-      async () => await this.connectToLatest(),
-    );
-    const disposeClient = await this.connectToLatest(signal);
+  override async initialize(signal: AbortSignal): Promise<Disposable> {
+    // signal will be aborted when the Toggleable is turned off.
+    signal.onabort = (e) => {
+      this.abortController.abort(e);
+    };
+    const unlisten = this.assignments.onDidAssignmentsChange(async (e) => {
+      if (
+        e.added.length ||
+        e.removed.some((s) => {
+          return s.server.endpoint === this.latestServerEndpoint;
+        })
+      ) {
+        // Abort any in-flight work from the last call.
+        this.abortController.abort();
+        await this.tearDownClient("Server removed");
+      } else {
+        // Don't care about updated server lists, or servers being
+        // removed that we weren't connected to.
+        return;
+      }
+      this.abortController = new AbortController();
+      await this.connectToLatest(this.abortController.signal);
+    });
+    await this.connectToLatest(this.abortController.signal);
     return {
-      dispose() {
-        assignmentListener.dispose();
-        if (disposeClient) {
-          disposeClient.dispose();
-        }
+      dispose: () => {
+        unlisten.dispose();
+        this.tearDownClient("Toggled off");
       },
     };
   }
 
-  private async connectToLatest(
-    signal?: AbortSignal,
-  ): Promise<Disposable | undefined> {
+  private async connectToLatest(signal?: AbortSignal): Promise<void> {
     const latestServer = await this.assignments.latestServer(signal);
     if (!latestServer) {
       await this.tearDownClient("No assigned servers");
@@ -70,14 +86,17 @@ export class LanguageClientController extends AsyncToggleable<Disposable> {
     }
     await this.tearDownClient("Newer runtime found");
     this.latestServerEndpoint = latestServer.endpoint;
+    if (signal?.aborted) {
+      return;
+    }
+    this.latestServerEndpoint = latestServer.endpoint;
     this.client = new ColabLanguageClient(
       this.vsLanguageClientFactory,
       latestServer,
       this.vs,
     );
     await this.client.start();
-    const dispose = this.tearDownClient.bind(this, "Toggled off");
-    return { dispose };
+    return;
   }
 
   private async tearDownClient(reason: string) {

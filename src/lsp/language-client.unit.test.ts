@@ -19,7 +19,10 @@ import {
   COLAB_CLIENT_AGENT_HEADER,
   COLAB_RUNTIME_PROXY_TOKEN_HEADER,
 } from "../colab/headers";
-import { AssignmentManager } from "../jupyter/assignments";
+import {
+  AssignmentChangeEvent,
+  AssignmentManager,
+} from "../jupyter/assignments";
 import { ColabAssignedServer } from "../jupyter/servers";
 import { TestUri } from "../test/helpers/uri";
 import { newVsCodeStub, VsCodeStub } from "../test/helpers/vscode";
@@ -138,9 +141,9 @@ describe("LanguageClientController", () => {
       );
     });
     const languageClient = new LanguageClientController(
+      vsStub.asVsCode(),
       assignmentStub,
       newTestLanguageClient,
-      vsStub.asVsCode(),
     );
     // Ensure the client is started so it registers its assignment-change handler.
     languageClient.on();
@@ -159,8 +162,10 @@ describe("LanguageClientController", () => {
   });
 
   it("disconnects when server is unassigned", async () => {
-    let connectedCallback = () => {};
-    assignmentStub.onDidAssignmentsChange.callsFake(((listener: () => {}) => {
+    let connectedCallback = (_: AssignmentChangeEvent) => {};
+    assignmentStub.onDidAssignmentsChange.callsFake(((
+      listener: (e: AssignmentChangeEvent) => {},
+    ) => {
       connectedCallback = listener;
       return { dispose: () => {} };
     }) as any);
@@ -175,9 +180,9 @@ describe("LanguageClientController", () => {
       );
     });
     const languageClient = new LanguageClientController(
+      vsStub.asVsCode(),
       assignmentStub,
       newTestLanguageClient,
-      vsStub.asVsCode(),
     );
     // Ensure the client is started so it registers its assignment-change handler.
     languageClient.on();
@@ -193,13 +198,19 @@ describe("LanguageClientController", () => {
 
     // // Ensure the client disconnects on the latest runtime disappearing.
     assignmentStub.latestServer.returns(Promise.resolve(undefined));
-    connectedCallback();
+    connectedCallback({
+      added: [],
+      changed: [],
+      removed: [{ server: latestServer, userInitiated: true }],
+    });
     await disconnectPromise;
   });
 
   it("connects to a newer runtime", async () => {
-    let assignmentsChangedCallback = () => {};
-    assignmentStub.onDidAssignmentsChange.callsFake(((listener: () => {}) => {
+    let assignmentsChangedCallback = (_: AssignmentChangeEvent) => {};
+    assignmentStub.onDidAssignmentsChange.callsFake(((
+      listener: (e: AssignmentChangeEvent) => {},
+    ) => {
       assignmentsChangedCallback = listener;
       return { dispose: () => {} };
     }) as any);
@@ -215,9 +226,9 @@ describe("LanguageClientController", () => {
       );
     });
     const languageClient = new LanguageClientController(
+      vsStub.asVsCode(),
       assignmentStub,
       newTestLanguageClient,
-      vsStub.asVsCode(),
     );
     languageClient.on();
     const socket1 = await connectionPromise1;
@@ -262,7 +273,11 @@ describe("LanguageClientController", () => {
 
     // Switch to the new server.
     assignmentStub.latestServer.returns(Promise.resolve(latestServer2));
-    assignmentsChangedCallback();
+    assignmentsChangedCallback({
+      added: [latestServer2],
+      changed: [],
+      removed: [],
+    });
 
     await disconnectPromise1;
     const socket2 = await connectionPromise2;
@@ -297,9 +312,9 @@ describe("LanguageClientController", () => {
       );
     });
     const languageClient = new LanguageClientController(
+      vsStub.asVsCode(),
       assignmentStub,
       newTestLanguageClient,
-      vsStub.asVsCode(),
     );
     languageClient.on();
     const socket1 = await connectionPromise1;
@@ -324,5 +339,63 @@ describe("LanguageClientController", () => {
     });
     expect(closed).to.equal(false);
     languageClient.dispose();
+  });
+
+  it("can call the assignment callback multiple times", async () => {
+    assignmentStub.latestServer
+      .onFirstCall()
+      .returns(Promise.resolve(undefined));
+    assignmentStub.latestServer
+      .onSecondCall()
+      .returns(Promise.reject("Test error"));
+    assignmentStub.latestServer
+      .onThirdCall()
+      .returns(Promise.resolve(latestServer));
+    let assignmentsChangedCallback = (_: AssignmentChangeEvent) => {};
+    assignmentStub.onDidAssignmentsChange.callsFake(((
+      listener: (e: AssignmentChangeEvent) => {},
+    ) => {
+      assignmentsChangedCallback = listener;
+      return { dispose: () => {} };
+    }) as any);
+    // Promise that resolves when the server receives a websocket connection.
+    const connectionPromise = new Promise<WebSocket>((resolve, reject) => {
+      server.on("connection", (socket) => resolve(socket));
+      // Avoid hanging the test forever.
+      setTimeout(
+        () => reject(new Error("Timeout waiting for connection")),
+        2000,
+      );
+    });
+    const languageClient = new LanguageClientController(
+      vsStub.asVsCode(),
+      assignmentStub,
+      newTestLanguageClient,
+    );
+    // Ensure the client is started so it registers its assignment-change handler.
+    languageClient.on();
+    // Call the callback twice, to check that it recovers from the first error returned,
+    // and also can handle multiple callbacks happening at once.
+    assignmentsChangedCallback({
+      added: [latestServer],
+      changed: [],
+      removed: [],
+    });
+    assignmentsChangedCallback({
+      added: [latestServer],
+      changed: [],
+      removed: [],
+    });
+    // Await connection after enabling the client.
+    const socket = await connectionPromise;
+    // Promise that resolves when the server disconnects.
+    const disconnectPromise = new Promise<void>((resolve, reject) => {
+      socket.on("close", () => resolve());
+      setTimeout(() => reject(new Error("Timeout waiting for close")), 5000);
+    });
+
+    // Ensure the client disconnects on disposal.
+    languageClient.off();
+    await disconnectPromise;
   });
 });
